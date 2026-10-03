@@ -1,5 +1,15 @@
 # YouTube Bulk Uploader
 
+[![CI](https://github.com/gsanders300/Youtube-Bulk-Uploader/actions/workflows/ci.yml/badge.svg)](https://github.com/gsanders300/Youtube-Bulk-Uploader/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/gsanders300/Youtube-Bulk-Uploader)](https://github.com/gsanders300/Youtube-Bulk-Uploader/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/gsanders300/Youtube-Bulk-Uploader)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Top language](https://img.shields.io/github/languages/top/gsanders300/Youtube-Bulk-Uploader)](https://github.com/gsanders300/Youtube-Bulk-Uploader/search?l=python)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#installation)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Checked with mypy](https://www.mypy-lang.org/static/mypy_badge.svg)](https://mypy-lang.org/)
+
 A command-line tool that uploads a folder of videos to your YouTube channel in one batch.
 Every video is uploaded as **unlisted**. Titles, descriptions, tags, and recording dates are
 filled in from each file, and you can review and correct the dates before anything is sent.
