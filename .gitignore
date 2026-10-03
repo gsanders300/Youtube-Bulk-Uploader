@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Python build and test output
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Project specific
+token-usage-output.txt
+.ruff_cache/
+
+# Credentials
+client_secrets.json
+client_secret_*.json
+token.json
+
+# Never add input videos or other input data to Git.
+/input/**
+!/input/.gitkeep
+
+# ExifTool
+exiftool.exe
+exiftool_files/

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.4"
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --locked --all-groups
+      - run: uv run --no-sync ruff check src/ tests/
+      - run: uv run --no-sync ruff format --check src/ tests/
+      - run: uv run --no-sync mypy src/
+      - run: uv build --clear
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.4"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --locked --no-default-groups --group test
+      - run: uv run --no-sync pytest
