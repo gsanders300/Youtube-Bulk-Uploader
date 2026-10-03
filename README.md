@@ -16,9 +16,14 @@ filled in from each file, and you can review and correct the dates before anythi
 
 It runs on Windows, macOS, and Linux.
 
+![The date review screen: a table of 5 sample videos showing file-system, EXIF, and selected recording dates, followed by options to accept all, quit, or edit one file's date.](docs/images/date-review.svg)
+
+*The date review screen that appears before an upload, shown with sample files.*
+
 ## Contents
 
 - [What it does](#what-it-does)
+- [Quick start](#quick-start)
 - [Before you start](#before-you-start)
 - [Installation](#installation)
 - [Set up Google API credentials](#set-up-google-api-credentials)
@@ -32,6 +37,7 @@ It runs on Windows, macOS, and Linux.
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [License](#license)
+- [Disclaimer](#disclaimer)
 
 ## What it does
 
@@ -49,6 +55,26 @@ It runs on Windows, macOS, and Linux.
 > The tool always requests `unlisted` privacy. Anyone with the link can watch an unlisted
 > video, but it won't appear in search or on your channel page. The tool can't upload public
 > videos.
+
+## Quick start
+
+These are the core commands once you have [uv](#1-install-uv) installed and a
+[Google OAuth client JSON file](#set-up-google-api-credentials). First time? Follow the
+detailed sections below instead.
+
+```bash
+git clone https://github.com/gsanders300/Youtube-Bulk-Uploader.git
+cd Youtube-Bulk-Uploader
+uv sync --locked
+
+uv run youtube-uploader doctor            # shows your config folder
+# Copy your OAuth JSON file into that folder as client_secrets.json
+uv run youtube-uploader auth              # one-time browser sign-in
+
+# Put your videos in the input folder, then:
+uv run youtube-uploader upload --dry-run  # preview, nothing is sent
+uv run youtube-uploader upload            # review dates, then upload
+```
 
 ## Before you start
 
@@ -618,3 +644,9 @@ or `--group type` for development tools), so `pyproject.toml` and `uv.lock` stay
 ## License
 
 [MIT](LICENSE)
+
+## Disclaimer
+
+This is an independent project. It isn't affiliated with, endorsed by, or sponsored by Google
+or YouTube. YouTube is a trademark of Google LLC. Your use of the YouTube Data API is subject
+to the [YouTube API Services Terms of Service](https://developers.google.com/youtube/terms/api-services-terms-of-service).
