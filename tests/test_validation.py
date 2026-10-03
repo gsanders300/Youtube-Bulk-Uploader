@@ -684,9 +684,16 @@ class TestVideoMetadataFromFile:
             "youtube_bulk_uploader.metadata.get_best_date_details",
             return_value=(exif_date, "exiftool", "DateTimeOriginal"),
         ):
-            with patch(
-                "youtube_bulk_uploader.metadata._filesystem_date",
-                return_value=dt(2026, 1, 1),
+            with (
+                patch(
+                    "youtube_bulk_uploader.metadata._filesystem_date",
+                    return_value=dt(2026, 1, 1),
+                ),
+                # Without this, the test depends on ExifTool being installed.
+                patch(
+                    "youtube_bulk_uploader.metadata.is_exiftool_available",
+                    return_value=True,
+                ),
             ):
                 meta = VideoMetadata.from_file(f, prefetched_exif_dates=None)
         assert meta.creation_date == exif_date
