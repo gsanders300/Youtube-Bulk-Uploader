@@ -37,7 +37,12 @@ from .exiftool import (
     get_exiftool_dates,
     is_exiftool_available,
 )
-from .metadata import EASTERN_TIME, UploadSettings, VideoMetadata
+from .metadata import (
+    EASTERN_TIME,
+    UploadSettings,
+    VideoMetadata,
+    generate_description,
+)
 from .state import UploadLedger, get_default_ledger_path
 from .uploader import DEFAULT_CHUNK_SIZE, UploadResult, YouTubeUploader
 from .utils import (
@@ -288,6 +293,9 @@ def review_dates(metadata_list: list[VideoMetadata]) -> list[VideoMetadata]:
                 m.creation_date = new_date
                 m.date_source = "user_corrected"
                 m.date_field = "user_corrected"
+                m.description = generate_description(
+                    m.filepath.name, m.custom_prefix, m.creation_date
+                )
                 console.print(f"  [green]✓ Updated to {_et(new_date)} ET[/green]")
             except ValueError:
                 console.print(
@@ -300,6 +308,9 @@ def review_dates(metadata_list: list[VideoMetadata]) -> list[VideoMetadata]:
                 m.creation_date = dt
                 m.date_source = "exiftool"
                 m.date_field = field
+                m.description = generate_description(
+                    m.filepath.name, m.custom_prefix, m.creation_date
+                )
                 console.print(f"  [green]✓ Selected {field}: {_et(dt)} ET[/green]")
             else:
                 console.print("  [red]Invalid option number[/red]")

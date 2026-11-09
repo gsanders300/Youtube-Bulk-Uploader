@@ -1258,6 +1258,31 @@ class TestMainHelpers:
         # Summer dates use EDT (UTC-4).
         assert _parse_eastern("2026-07-01 12:00") == dt(2026, 7, 1, 16, 0)
 
+    def test_review_date_edit_rebuilds_description(self, tmp_path):
+        from youtube_bulk_uploader.main import review_dates
+        from youtube_bulk_uploader.metadata import VideoMetadata
+
+        f = tmp_path / "old-tape.avi"
+        f.write_text("x")
+        with patch(
+            "youtube_bulk_uploader.metadata._filesystem_date",
+            return_value=dt(2026, 9, 30, 10, 2),
+        ):
+            meta = VideoMetadata.from_file(
+                f, custom_prefix="Family", use_exiftool=False
+            )
+        answers = iter(["1", "c", "1998-12-25 10:00", "a"])
+        with (
+            patch("youtube_bulk_uploader.main.get_exiftool_dates", return_value={}),
+            patch(
+                "youtube_bulk_uploader.main.click.prompt", lambda *a, **k: next(answers)
+            ),
+        ):
+            review_dates([meta])
+
+        assert meta.description.startswith("Family\n\nold-tape")
+        assert meta.description.endswith("Recorded (Eastern): 1998-12-25 10:00:00 EST")
+
     def test_version_comes_from_git_tag(self):
         import subprocess
 

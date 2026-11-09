@@ -130,6 +130,7 @@ class VideoMetadata:
     date_field: str = "filesystem"
     file_mtime_ns: int = 0
     upload_settings: UploadSettings = field(default_factory=UploadSettings)
+    custom_prefix: str | None = None  # kept so the description can be rebuilt
 
     @classmethod
     def from_file(
@@ -202,6 +203,7 @@ class VideoMetadata:
             date_source=date_source,
             date_field=date_field,
             file_mtime_ns=file_mtime_ns,
+            custom_prefix=custom_prefix,
         )
 
     def __str__(self) -> str:
