@@ -413,7 +413,8 @@ def _filesystem_date(
     stat_info = stat_result if stat_result is not None else filepath.stat()
 
     if os.name == "nt":
-        timestamp = stat_info.st_ctime
+        # Python 3.12+ adds st_birthtime and deprecates st_ctime as creation time.
+        timestamp = getattr(stat_info, "st_birthtime", stat_info.st_ctime)
     elif platform.system() == "Darwin":
         timestamp = getattr(stat_info, "st_birthtime", stat_info.st_mtime)
     else:

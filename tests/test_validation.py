@@ -308,6 +308,18 @@ class TestFilesystemDate:
         assert isinstance(result, datetime)
         assert result.tzinfo == UTC
 
+    def test_windows_prefers_birthtime_when_python_provides_it(self, monkeypatch):
+        """Python 3.12+ adds st_birthtime on Windows and deprecates st_ctime."""
+        from types import SimpleNamespace
+
+        from youtube_bulk_uploader import exiftool as et
+
+        monkeypatch.setattr(et.os, "name", "nt")
+        py312 = SimpleNamespace(st_ctime=100.0, st_birthtime=200.0, st_mtime=300.0)
+        py311 = SimpleNamespace(st_ctime=100.0, st_mtime=300.0)
+        assert et._filesystem_date(Path("x"), py312).timestamp() == 200.0
+        assert et._filesystem_date(Path("x"), py311).timestamp() == 100.0
+
 
 # ---------------------------------------------------------------------------
 # exiftool — _safe_parse_json
