@@ -135,6 +135,18 @@ class UploadLedger:
         )
         self.connection.commit()
 
+    def update_mtime(self, metadata: VideoMetadata, new_mtime_ns: int) -> None:
+        """Keep a file's row after sync-dates changes only its modification time."""
+        # REPLACE: a row an older run left at the new mtime must not block the move.
+        self.connection.execute(
+            """
+            UPDATE OR REPLACE uploads SET mtime_ns = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE path = ? AND size = ? AND mtime_ns = ?
+            """,
+            (new_mtime_ns, *self._identity(metadata)),
+        )
+        self.connection.commit()
+
     def record_result(
         self,
         metadata: VideoMetadata,

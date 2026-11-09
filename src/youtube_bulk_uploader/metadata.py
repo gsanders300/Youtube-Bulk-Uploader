@@ -12,7 +12,7 @@ from .exiftool import (
     is_exiftool_available,
     select_recording_date,
 )
-from .utils import extract_tags_from_filename, format_file_size, sanitize_filename
+from .utils import extract_tags_from_filename, sanitize_filename
 
 logger = logging.getLogger("youtube_uploader")
 EASTERN_TIME = ZoneInfo("America/New_York")
@@ -31,46 +31,6 @@ class UploadSettings:
     embeddable: bool = False
     public_stats_viewable: bool = True
     notify_subscribers: bool = True
-
-
-def get_file_creation_date(
-    filepath: Path,
-    use_exiftool: bool = True,
-) -> tuple[datetime, str]:
-    """
-    Extract file creation date, preferring embedded metadata via ExifTool.
-
-    Returns a tuple of (datetime, source) so callers do not need to run a
-    second ExifTool probe just to determine which source was used.
-
-    When ExifTool is available and use_exiftool is True:
-    - Extracts the recording date from video metadata
-      (DateTimeOriginal, CreateDate, etc.)
-    - Falls back to filesystem dates if no metadata date is found
-
-    When ExifTool is not available or use_exiftool is False:
-    - Windows: Uses st_ctime (creation time)
-    - macOS: Uses st_birthtime (creation time)
-    - Linux: Falls back to st_mtime (modification time)
-
-    All returned datetimes are timezone-aware (UTC).
-
-    Args:
-        filepath: Path to the file.
-        use_exiftool: Whether to use ExifTool for date extraction (default: True).
-
-    Returns:
-        Tuple of (timezone-aware UTC datetime, source string:
-        "exiftool" or "filesystem").
-    """
-    filepath = Path(filepath)
-
-    if use_exiftool and is_exiftool_available():
-        best_date, source, _field = get_best_date_details(filepath)
-        return best_date, source
-
-    # Filesystem fallback - always returns a timezone-aware UTC datetime.
-    return _filesystem_date(filepath), "filesystem"
 
 
 def generate_description(
@@ -204,17 +164,4 @@ class VideoMetadata:
             date_field=date_field,
             file_mtime_ns=file_mtime_ns,
             custom_prefix=custom_prefix,
-        )
-
-    def __str__(self) -> str:
-        """Human-readable representation."""
-        date_indicator = " (from metadata)" if self.date_source == "exiftool" else ""
-        return (
-            f"Video: {self.title}\n"
-            f"  File: {self.filepath.name}\n"
-            f"  Size: {format_file_size(self.file_size)}\n"
-            f"  Created: {self.creation_date.strftime('%Y-%m-%d %H:%M UTC')}"
-            f"{date_indicator}\n"
-            f"  Tags: {', '.join(self.tags[:5])}{'...' if len(self.tags) > 5 else ''}\n"
-            f"  Privacy: {self.privacy_status}"
         )

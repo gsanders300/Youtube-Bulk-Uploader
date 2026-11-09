@@ -16,18 +16,18 @@ Compact reference for AI agents working in this repository.
 
 - **Entry Point**: `src/youtube_bulk_uploader/main.py` using Click.
 - **ExifTool**: Critical for metadata extraction. The bundled `exiftool.exe` at project root is checked first by `src/youtube_bulk_uploader/exiftool.py`.
-- **YouTube API Chunk Size**: Must be a multiple of 256 KB. Handled in `src/youtube_bulk_uploader/main.py` and `src/youtube_bulk_uploader/uploader.py`.
+- **YouTube API Chunk Size**: Must be a multiple of 256 KB. `--chunk-size` takes whole MB (1-1024), so every allowed value already qualifies. Keep it in whole MB if you change the option.
 - **Privacy Policy**: Hardcoded to `unlisted`. Overridden and logged as warning if set otherwise in code.
 - **Metadata Priority**: EXIF recording dates (DateTimeOriginal, etc.) > Filesystem dates. Extracted in `src/youtube_bulk_uploader/metadata.py`.
 - **Versioning**: The git tag is the version. `pyproject.toml` holds a `0.0.0` placeholder, so don't bump it. `.github/workflows/release.yml` tags each push to `main` after CI passes, and `--version` reads `git describe --tags`.
 - **Display Time Zone**: Dates are stored and compared in UTC, but shown to the user, typed in the date editor, and sent as `recordingDate` in US Eastern (`EASTERN_TIME` in `src/youtube_bulk_uploader/metadata.py`).
-- **Batch Processing**: `get_batch_exiftool_dates` uses bounded subprocess batches to avoid Windows command-line limits.
+- **Batch Processing**: `get_batch_exiftool_dates` and `batch_update_file_dates` pass file names to ExifTool as a UTF-8 argfile on stdin (`-charset filename=utf8 -@ -`), never as command-line arguments. Windows recodes arguments to the system code page, which silently breaks non-English file names (ExifTool FAQ 18). Batches stay bounded at 500 files so one hung call can't lose every result. `validate_videos` rejects paths with line breaks because each stdin line is one argument.
 
 ## Operational Gotchas
 
 - **Input Folder**: Defaults to `./input` (ignored by git). Automatically created by `scan` if missing.
 - **Credentials**: Stored in the platform user config directory; legacy files under `config/` are detected.
-- **Upload State**: Successful file versions and unfinished resumable-session URIs are recorded in SQLite under the platform user data directory.
+- **Upload State**: Successful file versions and unfinished resumable-session URIs are recorded in SQLite under the platform user data directory. Rows are keyed on path, size, and mtime, so any command that changes a file's mtime must call `UploadLedger.update_mtime` (as `sync-dates` does), or the next `upload` sends the file again.
 - **Quotas**: The current `videos.insert` reference uses one Video Uploads unit per call and documents 100 calls per day.
 
 ## ExifTool Date Parsing — Critical Notes

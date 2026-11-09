@@ -32,6 +32,7 @@ from .auth import (
     validate_credentials_file,
 )
 from .exiftool import (
+    FILESYSTEM_FIELDS,
     batch_update_file_dates,
     find_exiftool,
     get_exiftool_dates,
@@ -61,9 +62,6 @@ from .video_processor import (
 )
 
 console = Console()
-
-# Minimum chunk size enforced by the YouTube resumable upload API.
-_CHUNK_ALIGNMENT = 256 * 1024  # 256 KB
 
 
 @dataclass
@@ -306,7 +304,9 @@ def review_dates(metadata_list: list[VideoMetadata]) -> list[VideoMetadata]:
             if 0 <= option_idx < len(available_options):
                 field, dt = available_options[option_idx]
                 m.creation_date = dt
-                m.date_source = "exiftool"
+                m.date_source = (
+                    "filesystem" if field in FILESYSTEM_FIELDS else "exiftool"
+                )
                 m.date_field = field
                 m.description = generate_description(
                     m.filepath.name, m.custom_prefix, m.creation_date
@@ -324,18 +324,18 @@ def _build_video_table(
     metadata_list: list[VideoMetadata], title: str, terminal_width: int
 ) -> Table:
     """Build a metadata table that adapts its columns to terminal width."""
+    # A from_width of 0 hides the Selected and From columns.
     if terminal_width >= 135:
-        layout = "wide"
-        filename_width = 32
+        filename_width, date_width, from_width = 32, 16, 18
     elif terminal_width >= 105:
-        layout = "medium"
-        filename_width = 24
+        filename_width, date_width, from_width = 24, 16, 14
     elif terminal_width >= 75:
-        layout = "compact"
-        filename_width = 12
+        filename_width, date_width, from_width = 12, 10, 10
     else:
-        layout = "narrow"
-        filename_width = 16
+        filename_width, date_width, from_width = 16, 10, 0
+    with_time = date_width == 16
+    date_format = "%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d"
+    show_selected = from_width > 0
 
     table = Table(
         title=title,
@@ -354,100 +354,44 @@ def _build_video_table(
         no_wrap=True,
     )
     table.add_column("Size", justify="right", width=9, no_wrap=True)
-
-    if layout == "wide":
-        table.add_column("FS Date (ET)", style="yellow", width=16, no_wrap=True)
-        table.add_column("EXIF Date (ET)", style="cyan", width=16, no_wrap=True)
-        table.add_column("Selected (ET)", style="bold green", width=16, no_wrap=True)
+    fs_header = "FS Date (ET)" if with_time else "FS (ET)"
+    exif_header = "EXIF Date (ET)" if with_time else "EXIF (ET)"
+    table.add_column(fs_header, style="yellow", width=date_width, no_wrap=True)
+    table.add_column(exif_header, style="cyan", width=date_width, no_wrap=True)
+    if show_selected:
+        selected_header = "Selected (ET)" if with_time else "Selected"
         table.add_column(
-            "From",
-            width=18,
-            overflow="ellipsis",
-            no_wrap=True,
+            selected_header, style="bold green", width=date_width, no_wrap=True
         )
-    elif layout == "medium":
-        table.add_column("FS Date (ET)", style="yellow", width=16, no_wrap=True)
-        table.add_column("EXIF Date (ET)", style="cyan", width=16, no_wrap=True)
-        table.add_column("Selected (ET)", style="bold green", width=16, no_wrap=True)
-        table.add_column(
-            "From",
-            width=14,
-            overflow="ellipsis",
-            no_wrap=True,
-        )
-    elif layout == "compact":
-        table.add_column("FS (ET)", style="yellow", width=10, no_wrap=True)
-        table.add_column("EXIF (ET)", style="cyan", width=10, no_wrap=True)
-        table.add_column("Selected", style="bold green", width=10, no_wrap=True)
-        table.add_column(
-            "From",
-            width=10,
-            overflow="ellipsis",
-            no_wrap=True,
-        )
-    else:
-        table.add_column("FS (ET)", style="yellow", width=10, no_wrap=True)
-        table.add_column("EXIF (ET)", style="cyan", width=10, no_wrap=True)
+        table.add_column("From", width=from_width, overflow="ellipsis", no_wrap=True)
 
     color_legend = "Yellow: FS  •  Cyan: EXIF  •  Green: selected"
     table.caption = (
-        f"{color_legend}  •  Widen the terminal to show selected dates."
-        if layout == "narrow"
-        else color_legend
+        color_legend
+        if show_selected
+        else f"{color_legend}  •  Widen the terminal to show selected dates."
     )
 
     for i, m in enumerate(metadata_list, 1):
-        index = str(i)
         filename = Text(
             _format_table_filename(m.filepath.name, filename_width),
             overflow="ellipsis",
             no_wrap=True,
         )
-        file_size = format_file_size(m.file_size)
-        source_name, source_style = _date_source_display(m.date_source)
-        source = Text(source_name, style=source_style, no_wrap=True)
-        if layout == "wide":
-            exif_display = _et(m.exif_date) if m.exif_date else "N/A"
-            table.add_row(
-                index,
-                filename,
-                file_size,
-                _et(m.fs_date),
-                exif_display,
-                _et(m.creation_date),
-                source,
-            )
-        elif layout == "medium":
-            exif_display = _et(m.exif_date) if m.exif_date else "N/A"
-            table.add_row(
-                index,
-                filename,
-                file_size,
-                _et(m.fs_date),
-                exif_display,
-                _et(m.creation_date),
-                source,
-            )
-        elif layout == "compact":
-            exif_display = _et(m.exif_date, "%Y-%m-%d") if m.exif_date else "N/A"
-            table.add_row(
-                index,
-                filename,
-                file_size,
-                _et(m.fs_date, "%Y-%m-%d"),
-                exif_display,
-                _et(m.creation_date, "%Y-%m-%d"),
-                source,
-            )
-        else:
-            exif_display = _et(m.exif_date, "%Y-%m-%d") if m.exif_date else "N/A"
-            table.add_row(
-                index,
-                filename,
-                file_size,
-                _et(m.fs_date, "%Y-%m-%d"),
-                exif_display,
-            )
+        row: list[str | Text] = [
+            str(i),
+            filename,
+            format_file_size(m.file_size),
+            _et(m.fs_date, date_format),
+            _et(m.exif_date, date_format) if m.exif_date else "N/A",
+        ]
+        if show_selected:
+            source_name, source_style = _date_source_display(m.date_source)
+            row += [
+                _et(m.creation_date, date_format),
+                Text(source_name, style=source_style, no_wrap=True),
+            ]
+        table.add_row(*row)
 
     return table
 
@@ -545,24 +489,21 @@ def exiftool() -> None:
     """
     console.print("\n[bold]ExifTool Status[/bold]\n")
 
-    if is_exiftool_available():
-        exiftool_path = find_exiftool()
-        if exiftool_path:
-            console.print("[green]✓ ExifTool is installed[/green]")
-            console.print(f"  Path: {exiftool_path}")
-            try:
-                result = subprocess.run(
-                    [exiftool_path, "-ver"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    console.print(f"  Version: {result.stdout.strip()}")
-            except Exception:
-                pass
-        else:
-            console.print("[yellow]✗ ExifTool could not be located[/yellow]")
+    exiftool_path = find_exiftool()
+    if exiftool_path:
+        console.print("[green]✓ ExifTool is installed[/green]")
+        console.print(f"  Path: {exiftool_path}")
+        try:
+            result = subprocess.run(
+                [exiftool_path, "-ver"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                console.print(f"  Version: {result.stdout.strip()}")
+        except (OSError, subprocess.SubprocessError) as e:
+            console.print(f"  [yellow]Version check failed:[/yellow] {e}")
 
         console.print(
             "\n[dim]ExifTool will be used to extract recording dates "
@@ -657,7 +598,13 @@ def doctor() -> None:
 @cli.command()
 @click.argument("directory", type=click.Path(), required=False)
 @click.option("--recursive", "-r", is_flag=True, help="Search subdirectories")
-def sync_dates(directory: str | None, recursive: bool) -> None:
+@click.option(
+    "--state-file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Upload ledger to keep in step (default: platform user data directory)",
+)
+def sync_dates(directory: str | None, recursive: bool, state_file: Path | None) -> None:
     """
     Align filesystem dates with recording dates embedded in video metadata.
 
@@ -711,6 +658,7 @@ def sync_dates(directory: str | None, recursive: bool) -> None:
             if meta.date_source == "exiftool" and meta.creation_date != current_fs_date:
                 proposed_changes.append(
                     {
+                        "metadata": meta,
                         "path": video_path,
                         "current": current_fs_date,
                         "proposed": meta.creation_date,
@@ -745,8 +693,18 @@ def sync_dates(directory: str | None, recursive: bool) -> None:
             (cast(Path, c["path"]), cast(datetime, c["proposed"]))
             for c in proposed_changes
         ]
-        console.print("[cyan]Updating file dates...[/cyan]")
-        updated = batch_update_file_dates(changes)
+        # Open the ledger before touching files so a ledger error changes nothing.
+        try:
+            ledger = UploadLedger(state_file or get_default_ledger_path())
+        except Exception as e:
+            raise click.ClickException(f"Could not use upload ledger: {e}") from e
+        with ledger:
+            console.print("[cyan]Updating file dates...[/cyan]")
+            updated = batch_update_file_dates(changes)
+            # The ledger keys on mtime; move rows so uploaded files aren't resent.
+            for change in proposed_changes:
+                meta = cast(VideoMetadata, change["metadata"])
+                ledger.update_mtime(meta, meta.filepath.stat().st_mtime_ns)
         console.print(
             f"\n[green]✓ Updated modification dates for "
             f"{updated}/{len(changes)} file(s).[/green]"
@@ -1154,18 +1112,8 @@ def upload(
 
     console.print("[green]Authenticated[/green]\n")
 
-    # Align chunk size to nearest 256 KB multiple (YouTube API requirement).
-    actual_chunk_size = max(
-        _CHUNK_ALIGNMENT,
-        (chunk_size * 1024 * 1024 // _CHUNK_ALIGNMENT) * _CHUNK_ALIGNMENT,
-    )
-    if actual_chunk_size != chunk_size * 1024 * 1024:
-        console.print(
-            f"[yellow]Note:[/yellow] Chunk size adjusted to "
-            f"{actual_chunk_size // 1024} KB to meet API requirements."
-        )
-
-    uploader = YouTubeUploader(service, chunk_size=actual_chunk_size)
+    # Whole MB is always a multiple of the API's required 256 KB.
+    uploader = YouTubeUploader(service, chunk_size=chunk_size * 1024 * 1024)
     results: list[UploadResult] = []
     console.print(f"Upload ledger: [dim]{ledger_path}[/dim]\n")
 

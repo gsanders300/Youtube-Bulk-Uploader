@@ -14,12 +14,11 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from .metadata import EASTERN_TIME, VideoMetadata
-from .utils import format_duration
 
 logger = logging.getLogger("youtube_uploader")
 
 # Retry configuration
-RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError, ConnectionResetError)
+RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, OSError)
 RETRIABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 RETRIABLE_ERROR_REASONS = {
     "backendError",
@@ -48,13 +47,6 @@ class UploadResult:
     def success(self) -> bool:
         """Check if upload was successful."""
         return self.status == "success"
-
-    def __str__(self) -> str:
-        if self.success:
-            duration = format_duration(self.upload_time_seconds)
-            return f"[SUCCESS] {self.title} -> {self.url} ({duration})"
-        else:
-            return f"[{self.status.upper()}] {self.title}: {self.error_message}"
 
 
 class YouTubeUploader:
@@ -101,10 +93,15 @@ class YouTubeUploader:
             "%Y-%m-%d"
         )
 
+        # The videos resource rejects < and > in title and description with a 400.
+        no_angle_brackets = str.maketrans("", "", "<>")
+        title = metadata.title.translate(no_angle_brackets).strip() or "Untitled Video"
+        description = metadata.description.translate(no_angle_brackets)
+
         settings = metadata.upload_settings
         snippet = {
-            "title": metadata.title[:100],  # YouTube limit
-            "description": metadata.description[:5000],  # YouTube limit
+            "title": title[:100],  # YouTube limit
+            "description": description[:5000],  # YouTube limit
             "tags": metadata.tags,
             "categoryId": settings.category_id,
         }
@@ -174,6 +171,17 @@ class YouTubeUploader:
 
             except HttpError as e:
                 reasons = self._http_error_reasons(e)
+                # Check reasons first: uploadLimitExceeded arrives as a 400.
+                if reasons.intersection(QUOTA_ERROR_REASONS):
+                    logger.error("YouTube API quota exceeded")
+                    return UploadResult(
+                        video_id="",
+                        title=metadata.title,
+                        url="",
+                        status="quota_exceeded",
+                        error_message="Daily API quota exceeded. Try again tomorrow.",
+                        upload_time_seconds=time.monotonic() - start_time,
+                    )
                 if e.resp.status in {404, 410} and getattr(
                     request, "resumable_uri", None
                 ):
@@ -189,27 +197,14 @@ class YouTubeUploader:
                     error = f"Retriable HTTP error {e.resp.status}"
                     logger.warning(error)
                 elif e.resp.status == 403:
-                    if reasons.intersection(QUOTA_ERROR_REASONS):
-                        logger.error("YouTube API quota exceeded")
-                        return UploadResult(
-                            video_id="",
-                            title=metadata.title,
-                            url="",
-                            status="quota_exceeded",
-                            error_message=(
-                                "Daily API quota exceeded. Try again tomorrow."
-                            ),
-                            upload_time_seconds=time.monotonic() - start_time,
-                        )
-                    else:
-                        return UploadResult(
-                            video_id="",
-                            title=metadata.title,
-                            url="",
-                            status="failed",
-                            error_message=f"Permission error: {e.resp.status}",
-                            upload_time_seconds=time.monotonic() - start_time,
-                        )
+                    return UploadResult(
+                        video_id="",
+                        title=metadata.title,
+                        url="",
+                        status="failed",
+                        error_message=f"Permission error: {e.resp.status}",
+                        upload_time_seconds=time.monotonic() - start_time,
+                    )
                 else:
                     raw_content = e.content
                     error_text = (

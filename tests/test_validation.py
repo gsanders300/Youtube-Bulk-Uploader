@@ -5,10 +5,9 @@ Coverage areas:
   - utils:        get_project_root, get_video_extensions, sanitize_filename,
                   extract_tags_from_filename, format_file_size, format_duration
   - exiftool:     _parse_exiftool_date, _filesystem_date, _safe_parse_json,
-                  get_batch_exiftool_dates (mocked), batch_update_file_dates,
-                  update_file_dates, get_best_date
+                  get_batch_exiftool_dates (mocked), batch_update_file_dates
   - metadata:     VideoMetadata.from_file (prefetched & fallback paths),
-                  generate_description, get_file_creation_date
+                  generate_description
   - video_processor: discover_videos, get_batch_summary, prepare_video_batch
   - uploader:     UploadResult.success, _build_request_body
   - main helpers: _truncate, _estimate_upload_seconds, _UploadState
@@ -17,6 +16,8 @@ Coverage areas:
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -369,6 +370,31 @@ class TestGetBatchExiftoolDates:
         assert cd.month == 3
         assert cd.day == 10
 
+    def test_unicode_paths_go_to_exiftool_as_utf8_argfile(self, tmp_path):
+        """Windows recodes argv to the system code page; ExifTool FAQ 18."""
+        import json
+
+        from youtube_bulk_uploader.exiftool import get_batch_exiftool_dates
+
+        f = tmp_path / "東京 café.mp4"
+        f.write_text("fake")
+        payload = json.dumps(
+            [{"SourceFile": f.as_posix(), "CreateDate": "2025:03:10 12:00:00"}]
+        )
+        with patch("youtube_bulk_uploader.exiftool.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=payload, stderr="")
+            with patch(
+                "youtube_bulk_uploader.exiftool.find_exiftool", return_value="exiftool"
+            ):
+                result = get_batch_exiftool_dates([f])
+
+        command = mock_run.call_args[0][0]
+        assert command[-4:] == ["-charset", "filename=utf8", "-@", "-"]
+        assert str(f.absolute()) not in command
+        assert mock_run.call_args.kwargs["input"] == str(f.absolute())
+        assert mock_run.call_args.kwargs["encoding"] == "utf-8"
+        assert result[str(f.absolute())]["CreateDate"].year == 2025
+
     def test_empty_file_list_returns_empty_dict(self):
         from youtube_bulk_uploader.exiftool import get_batch_exiftool_dates
 
@@ -393,66 +419,6 @@ class TestGetBatchExiftoolDates:
                 "youtube_bulk_uploader.exiftool.find_exiftool", return_value="exiftool"
             ):
                 assert get_batch_exiftool_dates([f]) == {}
-
-
-# ---------------------------------------------------------------------------
-# exiftool — get_best_date
-# ---------------------------------------------------------------------------
-
-
-class TestGetBestDate:
-    def test_respects_field_priority(self, tmp_path):
-        from youtube_bulk_uploader.exiftool import get_best_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        preferred = dt(2023, 6, 15)
-        lower_priority = dt(2020, 1, 1)
-        with patch(
-            "youtube_bulk_uploader.exiftool.get_exiftool_dates",
-            return_value={
-                "CreateDate": lower_priority,
-                "DateTimeOriginal": preferred,
-            },
-        ):
-            with patch(
-                "youtube_bulk_uploader.exiftool._filesystem_date",
-                return_value=dt(2024, 1, 1),
-            ):
-                result = get_best_date(f)
-        assert result == preferred
-
-    def test_no_exif_returns_fs_date(self, tmp_path):
-        from youtube_bulk_uploader.exiftool import get_best_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        fs = dt(2022, 5, 10)
-        with patch(
-            "youtube_bulk_uploader.exiftool.get_exiftool_dates", return_value={}
-        ):
-            with patch(
-                "youtube_bulk_uploader.exiftool._filesystem_date", return_value=fs
-            ):
-                result = get_best_date(f)
-        assert result == fs
-
-    def test_picks_exif_over_later_fs_date(self, tmp_path):
-        from youtube_bulk_uploader.exiftool import get_best_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        exif_date = dt(2021, 3, 15)
-        fs_date = dt(2024, 6, 7)  # today-ish (file copied recently)
-        with patch(
-            "youtube_bulk_uploader.exiftool.get_exiftool_dates",
-            return_value={"CreateDate": exif_date},
-        ):
-            with patch(
-                "youtube_bulk_uploader.exiftool._filesystem_date", return_value=fs_date
-            ):
-                result = get_best_date(f)
-        assert result == exif_date
 
 
 # ---------------------------------------------------------------------------
@@ -505,10 +471,10 @@ class TestBatchUpdateFileDates:
                     batch_update_file_dates([(f1, target), (f2, target)])
         # Both files share the same date → exactly 1 ExifTool subprocess call
         assert mock_run.call_count == 1
-        call_args = mock_run.call_args[0][0]
-        # Both file paths must appear in the single command
-        assert str(f1) in call_args
-        assert str(f2) in call_args
+        # Both file paths go to the single call's stdin argfile, one per line
+        stdin_paths = mock_run.call_args.kwargs["input"].splitlines()
+        assert str(f1.absolute()) in stdin_paths
+        assert str(f2.absolute()) in stdin_paths
 
     def test_windows_separate_dates_get_separate_calls(self, tmp_path):
         from youtube_bulk_uploader.exiftool import batch_update_file_dates
@@ -820,80 +786,6 @@ class TestVideoMetadataFromFile:
 
 
 # ---------------------------------------------------------------------------
-# metadata — get_file_creation_date
-# ---------------------------------------------------------------------------
-
-
-class TestGetFileCreationDate:
-    def test_returns_exiftool_date_when_available(self, tmp_path):
-        from youtube_bulk_uploader.metadata import get_file_creation_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        exif_date = dt(2020, 3, 15)
-        with patch(
-            "youtube_bulk_uploader.metadata.is_exiftool_available", return_value=True
-        ):
-            with patch(
-                "youtube_bulk_uploader.metadata.get_best_date_details",
-                return_value=(exif_date, "exiftool", "CreateDate"),
-            ):
-                result, source = get_file_creation_date(f)
-        assert result == exif_date
-        assert source == "exiftool"
-
-    def test_falls_back_to_filesystem_when_no_exif(self, tmp_path):
-        from youtube_bulk_uploader.metadata import get_file_creation_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        fs_date = dt(2023, 6, 1)
-        with patch(
-            "youtube_bulk_uploader.metadata.is_exiftool_available", return_value=True
-        ):
-            with patch(
-                "youtube_bulk_uploader.metadata.get_best_date_details",
-                return_value=(fs_date, "filesystem", "filesystem"),
-            ):
-                result, source = get_file_creation_date(f)
-        assert result == fs_date
-        assert source == "filesystem"
-
-    def test_falls_back_when_exiftool_unavailable(self, tmp_path):
-        from youtube_bulk_uploader.metadata import get_file_creation_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        fs_date = dt(2022, 4, 10)
-        with patch(
-            "youtube_bulk_uploader.metadata.is_exiftool_available", return_value=False
-        ):
-            with patch(
-                "youtube_bulk_uploader.metadata._filesystem_date", return_value=fs_date
-            ):
-                result, source = get_file_creation_date(f, use_exiftool=True)
-        assert result == fs_date
-        assert source == "filesystem"
-
-    def test_use_exiftool_false_skips_exiftool(self, tmp_path):
-        from youtube_bulk_uploader.metadata import get_file_creation_date
-
-        f = tmp_path / "v.mp4"
-        f.write_text("x")
-        fs_date = dt(2021, 9, 9)
-        with patch(
-            "youtube_bulk_uploader.metadata.is_exiftool_available"
-        ) as mock_avail:
-            with patch(
-                "youtube_bulk_uploader.metadata._filesystem_date", return_value=fs_date
-            ):
-                result, source = get_file_creation_date(f, use_exiftool=False)
-        mock_avail.assert_not_called()
-        assert result == fs_date
-        assert source == "filesystem"
-
-
-# ---------------------------------------------------------------------------
 # video_processor — discover_videos
 # ---------------------------------------------------------------------------
 
@@ -1062,30 +954,6 @@ class TestUploadResult:
         r = UploadResult(video_id="", title="T", url="", status="quota_exceeded")
         assert r.success is False
 
-    def test_str_success(self):
-        from youtube_bulk_uploader.uploader import UploadResult
-
-        r = UploadResult(
-            video_id="abc",
-            title="MyVid",
-            url="http://youtu.be/abc",
-            status="success",
-            upload_time_seconds=10,
-        )
-        s = str(r)
-        assert "SUCCESS" in s
-        assert "MyVid" in s
-
-    def test_str_failure(self):
-        from youtube_bulk_uploader.uploader import UploadResult
-
-        r = UploadResult(
-            video_id="", title="Vid", url="", status="failed", error_message="oops"
-        )
-        s = str(r)
-        assert "FAILED" in s
-        assert "oops" in s
-
 
 # ---------------------------------------------------------------------------
 # uploader — _build_request_body
@@ -1132,6 +1000,27 @@ class TestBuildRequestBody:
         meta.creation_date = dt(2026, 11, 8, 2, 0)  # 9pm EST on Nov 7
         body = uploader._build_request_body(meta)
         assert body["recordingDetails"]["recordingDate"] == "2026-11-07"
+
+    def test_angle_brackets_removed_from_title_and_description(self, tmp_path):
+        """The videos resource rejects < and > in title and description."""
+        from youtube_bulk_uploader.uploader import YouTubeUploader
+
+        uploader = YouTubeUploader(service=MagicMock())
+        meta = self._make_meta(tmp_path)
+        meta.title = "Mom <3 turns 60 >"
+        meta.description = "Family <3\n\nclip"
+        body = uploader._build_request_body(meta)
+        assert body["snippet"]["title"] == "Mom 3 turns 60"
+        assert body["snippet"]["description"] == "Family 3\n\nclip"
+
+    def test_title_of_only_angle_brackets_is_not_empty(self, tmp_path):
+        from youtube_bulk_uploader.uploader import YouTubeUploader
+
+        uploader = YouTubeUploader(service=MagicMock())
+        meta = self._make_meta(tmp_path)
+        meta.title = "<>"
+        body = uploader._build_request_body(meta)
+        assert body["snippet"]["title"] == "Untitled Video"
 
     def test_title_truncated_to_100(self, tmp_path):
         from youtube_bulk_uploader.uploader import YouTubeUploader
@@ -1215,6 +1104,46 @@ class TestBuildRequestBody:
 
 
 class TestMainHelpers:
+    @pytest.mark.parametrize(
+        ("width", "expected"),
+        [
+            (60, ["1", "clip.mp4", "1.0 KB", "2026-01-02", "2026-07-01"]),
+            (
+                80,
+                ["1", "clip.mp4", "1.0 KB", "2026-01-02", "2026-07-01"]
+                + ["2026-07-01", "EXIF"],
+            ),
+            (
+                110,
+                ["1", "clip.mp4", "1.0 KB", "2026-01-02 12:30", "2026-07-01 12:00"]
+                + ["2026-07-01 12:00", "EXIF"],
+            ),
+            (
+                150,
+                ["1", "clip.mp4", "1.0 KB", "2026-01-02 12:30", "2026-07-01 12:00"]
+                + ["2026-07-01 12:00", "EXIF"],
+            ),
+        ],
+    )
+    def test_video_table_rows_match_layout(self, width, expected):
+        from youtube_bulk_uploader.main import _build_video_table
+        from youtube_bulk_uploader.metadata import VideoMetadata
+
+        recorded = dt(2026, 7, 1, 16, 0)  # noon EDT
+        meta = VideoMetadata(
+            filepath=Path("clip.mp4"),
+            title="clip",
+            description="",
+            tags=[],
+            creation_date=recorded,
+            file_size=1024,
+            fs_date=dt(2026, 1, 2, 17, 30),  # 12:30 EST
+            exif_date=recorded,
+            date_source="exiftool",
+        )
+        table = _build_video_table([meta], "Videos", width)
+        assert [str(column._cells[0]) for column in table.columns] == expected
+
     def test_video_table_uses_terminal_width(self):
         from youtube_bulk_uploader.main import _build_video_table
 
@@ -1282,6 +1211,35 @@ class TestMainHelpers:
 
         assert meta.description.startswith("Family\n\nold-tape")
         assert meta.description.endswith("Recorded (Eastern): 1998-12-25 10:00:00 EST")
+
+    @pytest.mark.parametrize(
+        ("field", "expected_source"),
+        [("FileModifyDate", "filesystem"), ("CreateDate", "exiftool")],
+    )
+    def test_review_choice_keeps_true_date_source(
+        self, tmp_path, field, expected_source
+    ):
+        from youtube_bulk_uploader.main import review_dates
+        from youtube_bulk_uploader.metadata import VideoMetadata
+
+        f = tmp_path / "clip.mp4"
+        f.write_text("x")
+        meta = VideoMetadata.from_file(f, use_exiftool=False)
+        answers = iter(["1", "1", "a"])
+        with (
+            patch(
+                "youtube_bulk_uploader.main.get_exiftool_dates",
+                return_value={field: dt(2001, 2, 3)},
+            ),
+            patch(
+                "youtube_bulk_uploader.main.click.prompt", lambda *a, **k: next(answers)
+            ),
+        ):
+            review_dates([meta])
+
+        assert meta.creation_date == dt(2001, 2, 3)
+        assert meta.date_field == field
+        assert meta.date_source == expected_source
 
     def test_version_comes_from_git_tag(self):
         import subprocess

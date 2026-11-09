@@ -32,3 +32,4 @@ token.json
 # ExifTool
 exiftool.exe
 exiftool_files/
+/exiftool/

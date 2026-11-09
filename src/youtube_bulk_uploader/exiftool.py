@@ -42,33 +42,13 @@ DATE_FIELDS = METADATA_FIELDS + FILESYSTEM_FIELDS
 _exiftool_path: str | None = None
 _exiftool_searched: bool = False
 
-# Keep comfortably below Windows' command-line limit and POSIX ARG_MAX.  The
-# character budget is deliberately conservative because paths may expand when
-# encoded by the process launcher.
-_MAX_COMMAND_CHARS = 28_000 if os.name == "nt" else 200_000
+# Bounded batches keep one slow or hung ExifTool call from losing every result.
 _MAX_FILES_PER_CALL = 500
 
-
-def _chunk_path_arguments(base_command: list[str], paths: list[str]) -> list[list[str]]:
-    """Split path arguments into portable command-line-sized batches."""
-    batches: list[list[str]] = []
-    current_batch: list[str] = []
-    base_chars = sum(len(arg) + 1 for arg in base_command)
-    current_chars = base_chars
-    for path in paths:
-        path_chars = len(path) + 1
-        if current_batch and (
-            len(current_batch) >= _MAX_FILES_PER_CALL
-            or current_chars + path_chars > _MAX_COMMAND_CHARS
-        ):
-            batches.append(current_batch)
-            current_batch = []
-            current_chars = base_chars
-        current_batch.append(path)
-        current_chars += path_chars
-    if current_batch:
-        batches.append(current_batch)
-    return batches
+# File names go to ExifTool as a UTF-8 argfile on stdin, one per line. Windows
+# recodes command-line arguments to the system code page, which can't hold every
+# character (ExifTool FAQ 18), and stdin has no command-line length limit.
+_ARGFILE_OPTIONS = ["-charset", "filename=utf8", "-@", "-"]
 
 
 def find_exiftool() -> str | None:
@@ -91,52 +71,8 @@ def find_exiftool() -> str | None:
 
     _exiftool_searched = True
 
-    # Common names for the executable across platforms.
     names = ["exiftool.exe", "exiftool"] if os.name == "nt" else ["exiftool"]
-
-    # 1. Check project root (prioritize bundled version).
-    root = get_project_root()
-    for name in names:
-        path = root / name
-        if path.is_file():
-            try:
-                result = subprocess.run(
-                    [str(path), "-ver"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    version = result.stdout.strip()
-                    logger.debug(f"Found bundled ExifTool: {path} (version {version})")
-                    _exiftool_path = str(path)
-                    return _exiftool_path
-            except (OSError, subprocess.SubprocessError):
-                continue
-
-    # 2. Check system PATH.
-    for name in names:
-        executable = shutil.which(name)
-        if not executable:
-            continue
-        try:
-            result = subprocess.run(
-                [executable, "-ver"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                logger.debug(
-                    f"Found ExifTool in PATH: {name} (version {result.stdout.strip()})"
-                )
-                _exiftool_path = executable
-                return _exiftool_path
-        except (OSError, subprocess.SubprocessError):
-            continue
-
-    # 3. Check common installation paths.
-    if platform.system() == "Windows":
+    if os.name == "nt":
         common_paths = [
             r"C:\Program Files\exiftool\exiftool.exe",
             r"C:\exiftool\exiftool.exe",
@@ -149,21 +85,28 @@ def find_exiftool() -> str | None:
             "/opt/homebrew/bin/exiftool",
         ]
 
-    for common_path in common_paths:
-        if os.path.isfile(common_path):
-            try:
-                result = subprocess.run(
-                    [common_path, "-ver"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-            except (OSError, subprocess.SubprocessError):
-                continue
-            if result.returncode == 0:
-                logger.debug(f"Found ExifTool at: {common_path}")
-                _exiftool_path = common_path
-                return _exiftool_path
+    root = get_project_root()
+    candidates = [
+        *(str(root / name) for name in names),
+        *(shutil.which(name) for name in names),
+        *common_paths,
+    ]
+    for candidate in candidates:
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        try:
+            result = subprocess.run(
+                [candidate, "-ver"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0:
+            logger.debug(f"Found ExifTool {result.stdout.strip()} at {candidate}")
+            _exiftool_path = candidate
+            return _exiftool_path
 
     logger.debug("ExifTool not found on this system")
     return None
@@ -231,21 +174,22 @@ def get_batch_exiftool_dates(filepaths: list[Path]) -> dict[str, dict]:
     base_cmd = [exiftool, "-json", "-m"]
     for field in DATE_FIELDS:
         base_cmd.append(f"-{field}")
-
-    path_batches = _chunk_path_arguments(base_cmd, path_strs)
+    base_cmd += _ARGFILE_OPTIONS
 
     batch_results: dict[str, dict] = {}
-    for paths in path_batches:
+    for start in range(0, len(path_strs), _MAX_FILES_PER_CALL):
+        paths = path_strs[start : start + _MAX_FILES_PER_CALL]
         try:
-            cmd = base_cmd + paths
             logger.debug(f"Running ExifTool for {len(paths)} file(s)")
             timeout = max(30, len(paths) * 2)
             result = subprocess.run(
-                cmd,
+                base_cmd,
+                input="\n".join(paths),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",
+                # Round-trips non-UTF-8 POSIX file names, as argv did.
+                errors="surrogateescape",
                 timeout=timeout,
                 check=False,
             )
@@ -339,111 +283,6 @@ def get_best_date_details(filepath: Path) -> tuple[datetime, str, str]:
     return select_recording_date(exif_dates, _filesystem_date(filepath))
 
 
-def get_best_date(filepath: Path) -> datetime:
-    """
-    Get the best available date from video metadata.
-
-    Uses the documented embedded-metadata field priority and falls back to the
-    actual OS filesystem date only when no plausible metadata date exists.
-
-    Args:
-        filepath: Path to the video file.
-
-    Returns:
-        Timezone-aware UTC datetime.
-    """
-    best_date, source, field = get_best_date_details(filepath)
-    logger.debug(
-        "Selected %s date for %s from %s: %s",
-        source,
-        filepath.name,
-        field,
-        best_date,
-    )
-    return best_date
-
-
-def update_file_dates(filepath: Path, new_date: datetime) -> bool:
-    """
-    Update the file's filesystem dates to match the metadata date.
-
-    Updates modification and access times on all platforms.
-    Additionally updates creation time on Windows (via ExifTool) and
-    macOS (via SetFile if available).
-
-    Args:
-        filepath: Path to the video file.
-        new_date: New date to set (may be timezone-aware or naive).
-
-    Returns:
-        True if successful, False otherwise.
-    """
-    filepath = Path(filepath)
-    if new_date.tzinfo is None:
-        new_date = new_date.replace(tzinfo=UTC)
-    local_date = new_date.astimezone()
-    timestamp = new_date.timestamp()
-
-    try:
-        # Update modification and access times (portable across all platforms).
-        os.utime(filepath, (timestamp, timestamp))
-        logger.debug(f"Updated modification time for {filepath.name}")
-
-        system = platform.system()
-
-        if system == "Windows":
-            # Use the already-cached ExifTool path; no extra discovery needed.
-            exiftool = find_exiftool()
-            if exiftool:
-                win_date_str = local_date.strftime("%Y:%m:%d %H:%M:%S")
-                result = subprocess.run(
-                    [
-                        exiftool,
-                        "-overwrite_original",
-                        f"-FileCreateDate={win_date_str}",
-                        str(filepath),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode == 0:
-                    logger.debug(f"Updated Windows creation time for {filepath.name}")
-                else:
-                    logger.debug(
-                        f"Could not update Windows creation time: {result.stderr}"
-                    )
-
-        elif system == "Darwin":
-            try:
-                setfile_date = local_date.strftime("%m/%d/%Y %H:%M:%S")
-                result = subprocess.run(
-                    ["SetFile", "-d", setfile_date, str(filepath)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    logger.debug(f"Updated macOS creation time for {filepath.name}")
-            except FileNotFoundError:
-                # os.utime already updated mtime; creation time is unsupported
-                # without Apple's command-line developer tools.
-                logger.warning(
-                    "SetFile is unavailable; creation time was not changed for %s",
-                    filepath.name,
-                )
-
-        logger.info(
-            f"Synced file dates for {filepath.name} to "
-            f"{new_date.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        return True
-
-    except Exception as e:
-        logger.warning(f"Failed to update file dates for {filepath.name}: {e}")
-        return False
-
-
 def batch_update_file_dates(changes: list[tuple[Path, datetime]]) -> int:
     """
     Update filesystem dates for multiple files efficiently.
@@ -453,8 +292,8 @@ def batch_update_file_dates(changes: list[tuple[Path, datetime]]) -> int:
     Modification/access times are still set individually via os.utime (cheap
     syscall, no subprocess overhead).
 
-    On macOS/Linux, falls back to calling update_file_dates per file since
-    SetFile/touch do not support multi-file batching in a useful way.
+    On macOS, also sets each file's creation time with SetFile, one call per
+    file. Linux has no settable creation time, so only mtime/atime change.
 
     Args:
         changes: List of (filepath, new_date) pairs.
@@ -501,16 +340,21 @@ def batch_update_file_dates(changes: list[tuple[Path, datetime]]) -> int:
                 exiftool,
                 "-overwrite_original",
                 f"-FileCreateDate={date_str}",
+                *_ARGFILE_OPTIONS,
             ]
-            for path_batch in _chunk_path_arguments(
-                base_cmd, [str(path) for path in filepaths]
-            ):
+            # Absolute paths can't start with "#", which an argfile treats as a comment.
+            path_strs = [str(path.absolute()) for path in filepaths]
+            for start in range(0, len(path_strs), _MAX_FILES_PER_CALL):
+                path_batch = path_strs[start : start + _MAX_FILES_PER_CALL]
                 timeout = max(30, len(path_batch) * 2)
                 try:
                     result = subprocess.run(
-                        base_cmd + path_batch,
+                        base_cmd,
+                        input="\n".join(path_batch),
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="surrogateescape",
                         timeout=timeout,
                         check=False,
                     )

@@ -61,6 +61,12 @@ def validate_videos(
     for path in video_paths:
         path = Path(path)
 
+        # ExifTool reads one path per stdin line; a break would split it into
+        # extra arguments, which ExifTool could read as options.
+        if "\n" in str(path) or "\r" in str(path):
+            invalid.append((path, "Path contains a line break"))
+            continue
+
         if not path.exists():
             invalid.append((path, "File does not exist"))
             continue

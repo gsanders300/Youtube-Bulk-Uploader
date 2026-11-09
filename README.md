@@ -408,6 +408,7 @@ Common category IDs:
 | Option | Description |
 | --- | --- |
 | `-r, --recursive` | Include subfolders. |
+| `--state-file PATH` | Upload ledger to keep in step, so already uploaded files aren't uploaded again. Use the same path you pass to `upload --state-file`. Default: platform user data directory. |
 
 > [!CAUTION]
 > `sync-dates` changes file dates on disk. It sets the modification time, and the creation
@@ -417,8 +418,8 @@ Common category IDs:
 
 | YouTube field | Source |
 | --- | --- |
-| Title | File name without its extension, with `-`, `_`, and `.` replaced by spaces. Max 100 characters. |
-| Description | The `--prefix` text (if any), a blank line, the file name without its extension, a blank line, and a line like `Recorded (Eastern): 2026-07-01 12:00:00 EDT`. Max 5000 characters. |
+| Title | File name without its extension, with `-`, `_`, and `.` replaced by spaces. `<` and `>` are removed because YouTube rejects them. Max 100 characters. |
+| Description | The `--prefix` text (if any), a blank line, the file name without its extension, a blank line, and a line like `Recorded (Eastern): 2026-07-01 12:00:00 EDT`. `<` and `>` are removed because YouTube rejects them. Max 5000 characters. |
 | Tags | Words from the file name, minus common words, numbers, and one-letter words, plus any `--tag` values. Max 500 characters combined. |
 | Recording date | The US Eastern calendar date chosen in the review step. |
 | Privacy | `unlisted` (but see [Limits on new Google Cloud projects](#limits-on-new-google-cloud-projects)). |

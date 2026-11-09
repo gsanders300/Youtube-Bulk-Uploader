@@ -1,6 +1,7 @@
 """Reliability, restart-safety, and cross-platform regression tests."""
 
 import json
+import os
 import subprocess
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -83,6 +84,35 @@ class TestDateSelection:
 
         assert source == "exiftool"
         assert selected.tzinfo is UTC
+
+
+class TestFindExiftool:
+    def test_bundled_copy_wins_and_broken_candidates_are_skipped(
+        self, tmp_path, monkeypatch
+    ):
+        from youtube_bulk_uploader import exiftool as et
+
+        bundled = tmp_path / ("exiftool.exe" if os.name == "nt" else "exiftool")
+        bundled.write_text("")
+        on_path = tmp_path / "bin" / bundled.name
+        on_path.parent.mkdir()
+        on_path.write_text("")
+        # Registering both cache globals makes monkeypatch restore them afterward.
+        monkeypatch.setattr(et, "_exiftool_path", None)
+        monkeypatch.setattr(et, "_exiftool_searched", False)
+        monkeypatch.setattr(et, "get_project_root", lambda: tmp_path)
+        monkeypatch.setattr(et.shutil, "which", lambda _name: str(on_path))
+
+        def fake_run(command, **_kwargs):
+            # The bundled copy fails its version check, so PATH is next.
+            return MagicMock(returncode=1 if command[0] == str(bundled) else 0)
+
+        with patch.object(et.subprocess, "run", side_effect=fake_run):
+            assert et.find_exiftool() == str(on_path)
+
+        monkeypatch.setattr(et, "_exiftool_searched", False)
+        with patch.object(et.subprocess, "run", return_value=MagicMock(returncode=0)):
+            assert et.find_exiftool() == str(bundled)
 
 
 class TestExiftoolBatchReliability:
@@ -186,6 +216,46 @@ class TestUploadLedger:
             metadata.upload_settings = UploadSettings(contains_synthetic_media=True)
             assert ledger.resumable_uri(metadata) is None
 
+    def test_sync_dates_keeps_uploaded_files_in_ledger(self, tmp_path):
+        from youtube_bulk_uploader.main import cli
+        from youtube_bulk_uploader.metadata import VideoMetadata
+        from youtube_bulk_uploader.state import UploadLedger
+
+        video = tmp_path / "input" / "clip.mp4"
+        video.parent.mkdir()
+        video.write_bytes(b"video data")
+        database = tmp_path / "ledger.sqlite3"
+        with UploadLedger(database) as ledger:
+            uploaded = VideoMetadata.from_file(video, use_exiftool=False)
+            ledger.record_result(uploaded, "success", url="https://youtu.be/abc")
+
+        def fake_dates(paths):
+            return {
+                str(p.absolute()): {"CreateDate": utc_date(2020, 1, 2)} for p in paths
+            }
+
+        with (
+            patch(
+                "youtube_bulk_uploader.main.is_exiftool_available", return_value=True
+            ),
+            patch(
+                "youtube_bulk_uploader.video_processor.get_batch_exiftool_dates",
+                side_effect=fake_dates,
+            ),
+            patch("youtube_bulk_uploader.exiftool.find_exiftool", return_value=None),
+        ):
+            result = CliRunner().invoke(
+                cli,
+                ["sync-dates", str(video.parent), "--state-file", str(database)],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        synced = VideoMetadata.from_file(video, use_exiftool=False)
+        assert synced.file_mtime_ns != uploaded.file_mtime_ns
+        with UploadLedger(database) as ledger:
+            assert ledger.successful_url(synced) == "https://youtu.be/abc"
+
 
 class TestUploaderReliability:
     @staticmethod
@@ -196,11 +266,16 @@ class TestUploaderReliability:
         ).encode()
         return HttpError(response, content)
 
-    def test_structured_quota_reason_stops_upload(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("status", "reason"),
+        # videos.insert documents uploadLimitExceeded as 400, not 403.
+        [(403, "quotaExceeded"), (400, "uploadLimitExceeded")],
+    )
+    def test_structured_quota_reason_stops_upload(self, tmp_path, status, reason):
         from youtube_bulk_uploader.uploader import YouTubeUploader
 
         request = MagicMock()
-        request.next_chunk.side_effect = self._http_error(403, "quotaExceeded")
+        request.next_chunk.side_effect = self._http_error(status, reason)
         result = YouTubeUploader(MagicMock())._execute_resumable_upload(
             request, make_metadata(tmp_path)
         )
@@ -318,6 +393,66 @@ class TestUploaderReliability:
         assert "paidProductPlacementDetails" in request_call.kwargs["part"]
 
 
+class TestUploadCommand:
+    def test_skips_ledger_hits_and_stops_after_quota(self, tmp_path):
+        from youtube_bulk_uploader.main import cli
+        from youtube_bulk_uploader.metadata import VideoMetadata
+        from youtube_bulk_uploader.state import UploadLedger
+        from youtube_bulk_uploader.uploader import UploadResult
+
+        folder = tmp_path / "input"
+        folder.mkdir()
+        for name in ("a.mp4", "b.mp4", "c.mp4"):
+            (folder / name).write_bytes(b"video data")
+        database = tmp_path / "ledger.sqlite3"
+        with UploadLedger(database) as ledger:
+            already = VideoMetadata.from_file(folder / "a.mp4", use_exiftool=False)
+            ledger.record_result(already, "success", url="https://youtu.be/aaa")
+
+        attempted = []
+
+        def fake_upload(video, *_args, **_kwargs):
+            attempted.append(video.filepath.name)
+            return UploadResult(
+                video_id="",
+                title=video.title,
+                url="",
+                status="quota_exceeded",
+                error_message="Daily API quota exceeded. Try again tomorrow.",
+            )
+
+        with (
+            patch("youtube_bulk_uploader.main.get_authenticated_service"),
+            patch("youtube_bulk_uploader.main.YouTubeUploader") as uploader_class,
+        ):
+            uploader_class.return_value.upload_video.side_effect = fake_upload
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "upload",
+                    str(folder),
+                    "--no-exiftool",
+                    "--state-file",
+                    str(database),
+                ],
+                input="a\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        # a.mp4 is in the ledger and c.mp4 comes after the quota error.
+        assert attempted == ["b.mp4"]
+        assert "Quota exceeded: 2" in result.output
+        assert "Already uploaded: 1" in result.output
+        with UploadLedger(database) as ledger:
+            rows = dict(
+                ledger.connection.execute(
+                    "SELECT path, status FROM uploads ORDER BY path"
+                ).fetchall()
+            )
+        statuses = {os.path.basename(path): status for path, status in rows.items()}
+        assert statuses == {"a.mp4": "success", "b.mp4": "quota_exceeded"}
+
+
 class TestPortableConfiguration:
     def test_config_and_data_directories_can_be_overridden(self, tmp_path):
         from youtube_bulk_uploader.utils import get_config_dir, get_data_dir
@@ -409,6 +544,16 @@ class TestVideoValidation:
 
         assert valid == []
         assert invalid == [(video, "File is empty")]
+
+    def test_line_break_in_path_is_rejected(self, tmp_path):
+        """ExifTool reads one path per stdin line; a break would split it."""
+        from youtube_bulk_uploader.video_processor import validate_videos
+
+        video = tmp_path / "clip\n-all=\n.mp4"
+        valid, invalid = validate_videos([video])
+
+        assert valid == []
+        assert invalid == [(video, "Path contains a line break")]
 
     def test_metadata_preparation_uses_one_batch_exiftool_call(self, tmp_path):
         from youtube_bulk_uploader.video_processor import prepare_video_batch
