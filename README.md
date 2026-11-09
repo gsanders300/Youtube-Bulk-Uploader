@@ -22,13 +22,12 @@ It runs on Windows, macOS, and Linux.
 
 ## Contents
 
+- [Upload a batch](#upload-a-batch)
 - [What it does](#what-it-does)
-- [Quick start](#quick-start)
 - [Before you start](#before-you-start)
 - [Installation](#installation)
 - [Set up Google API credentials](#set-up-google-api-credentials)
 - [First run](#first-run)
-- [Uploading videos](#uploading-videos)
 - [Command reference](#command-reference)
 - [How metadata is generated](#how-metadata-is-generated)
 - [How recording dates are chosen](#how-recording-dates-are-chosen)
@@ -38,6 +37,58 @@ It runs on Windows, macOS, and Linux.
 - [Development](#development)
 - [License](#license)
 - [Disclaimer](#disclaimer)
+
+## Upload a batch
+
+First time? Do [Installation](#installation), [Set up Google API credentials](#set-up-google-api-credentials),
+and [First run](#first-run) once, then come back here.
+
+Open a terminal in the project folder, then:
+
+1. Copy your videos into the `input` folder.
+2. Run the upload:
+
+   ```bash
+   uv run youtube-uploader upload
+   ```
+
+3. Check the dates in the review table. They're in US Eastern time.
+   - **`a`** accepts all dates and starts uploading.
+   - **`q`** cancels. Nothing has been sent to YouTube yet.
+   - **A file number**, such as `3`, fixes that file's date. Pick one of the dates ExifTool
+     found, enter `c` to type your own as `YYYY-MM-DD HH:MM` in Eastern time, or enter `s` to
+     keep the current date. You return to the table afterward.
+4. If a browser window opens, sign in with the account that owns your channel. Google asks
+   again from time to time.
+5. When the summary lists a URL for every video, empty the `input` folder.
+
+If the upload stops partway (daily quota, dropped connection, or Ctrl+C), run step 2 again.
+Videos that already finished are skipped. See [Upload history, retries, and quota](#upload-history-retries-and-quota).
+
+### Common options
+
+```bash
+# Upload from a different folder, including subfolders
+uv run youtube-uploader upload "/path/to/videos" --recursive
+
+# Add text to the top of every description
+uv run youtube-uploader upload --prefix "Family vacation 2026"
+
+# Don't notify subscribers about each video in a large batch
+uv run youtube-uploader upload --no-notify-subscribers
+
+# Set category, language, and an extra tag on every video
+uv run youtube-uploader upload --category-id 27 --default-language en --tag education
+
+# Wait 30 seconds between uploads and write a detailed log
+uv run youtube-uploader upload --delay 30 --log-file upload.log
+```
+
+> [!WARNING]
+> YouTube requires you to disclose realistic altered or synthetic content
+> (`--altered-content`) and paid promotions (`--paid-promotion`). Both default to "no."
+> Settings apply to every video in the batch, so split videos with different answers into
+> separate folders.
 
 ## What it does
 
@@ -55,26 +106,6 @@ It runs on Windows, macOS, and Linux.
 > The tool always requests `unlisted` privacy. Anyone with the link can watch an unlisted
 > video, but it won't appear in search or on your channel page. The tool can't upload public
 > videos.
-
-## Quick start
-
-These are the core commands once you have [uv](#1-install-uv) installed and a
-[Google OAuth client JSON file](#set-up-google-api-credentials). First time? Follow the
-detailed sections below instead.
-
-```bash
-git clone https://github.com/gsanders300/Youtube-Bulk-Uploader.git
-cd Youtube-Bulk-Uploader
-uv sync --locked
-
-uv run youtube-uploader doctor            # shows your config folder
-# Copy your OAuth JSON file into that folder as client_secrets.json
-uv run youtube-uploader auth              # one-time browser sign-in
-
-# Put your videos in the input folder, then:
-uv run youtube-uploader upload --dry-run  # preview, nothing is sent
-uv run youtube-uploader upload            # review dates, then upload
-```
 
 ## Before you start
 
@@ -293,81 +324,10 @@ It should end with `All required checks passed.`
 
 > [!TIP]
 > To keep the client file somewhere else, pass it with `--credentials PATH` to `auth` and
-> `upload`. The tool doesn't copy it. If sign-in has to happen again (every 7 days in
-> Testing) and the file isn't in the config folder, `upload` fails unless you pass
-> `--credentials` again.
+> `upload`. The tool doesn't copy it. If sign-in has to happen again and the file isn't in
+> the config folder, `upload` fails unless you pass `--credentials` again.
 
-## Uploading videos
-
-### 1. Add your videos
-
-Put your video files in the `input` folder inside the project folder. Or leave them anywhere
-and pass that folder's path to each command, in quotes if it contains spaces.
-
-### 2. Preview
-
-```bash
-uv run youtube-uploader scan
-```
-
-This lists every video it found with its size, dates, and estimated upload time. Nothing is
-uploaded and nothing is sent to YouTube.
-
-### 3. Do a dry run
-
-```bash
-uv run youtube-uploader upload --dry-run
-```
-
-This shows the upload settings and the videos that would be uploaded. It doesn't sign in or
-contact YouTube.
-
-### 4. Upload
-
-```bash
-uv run youtube-uploader upload
-```
-
-Before uploading, the tool shows a numbered table of proposed recording dates and asks for a
-selection:
-
-- **`a`** accepts all dates and starts uploading.
-- **`q`** cancels without uploading anything.
-- **A file number**, such as `3`, opens that file's date editor. It lists every date ExifTool
-  found in the file, numbered. Then:
-  - Enter one of those numbers to use that date.
-  - Enter `c` to type your own date as `YYYY-MM-DD HH:MM`, in UTC.
-  - Enter `s` to keep the current date.
-
-  You return to the table afterward, so you can edit more files before entering `a`.
-
-Next, the tool signs in (using your saved token) and shows a live progress table. When it
-finishes, it prints a summary and the URL of every uploaded video.
-
-### Common examples
-
-```bash
-# Upload from a different folder, including subfolders
-uv run youtube-uploader upload "/path/to/videos" --recursive
-
-# Add text to the top of every description
-uv run youtube-uploader upload --prefix "Family vacation 2026"
-
-# Don't notify subscribers about each video in a large batch
-uv run youtube-uploader upload --no-notify-subscribers
-
-# Set category, language, and an extra tag on every video
-uv run youtube-uploader upload --category-id 27 --default-language en --tag education
-
-# Wait 30 seconds between uploads and write a detailed log
-uv run youtube-uploader upload --delay 30 --log-file upload.log
-```
-
-> [!WARNING]
-> YouTube requires you to disclose realistic altered or synthetic content
-> (`--altered-content`) and paid promotions (`--paid-promotion`). Both default to "no."
-> Settings apply to every video in the batch, so split videos with different answers into
-> separate folders.
+Setup is done. To upload, follow [Upload a batch](#upload-a-batch).
 
 ## Command reference
 
@@ -460,7 +420,7 @@ Common category IDs:
 | Title | File name without its extension, with `-`, `_`, and `.` replaced by spaces. Max 100 characters. |
 | Description | The `--prefix` text (if any), a blank line, the file name without its extension, a blank line, and a line like `Recorded (Eastern): 2026-07-01 12:00:00 EDT`. Max 5000 characters. |
 | Tags | Words from the file name, minus common words, numbers, and one-letter words, plus any `--tag` values. Max 500 characters combined. |
-| Recording date | The calendar date (UTC) chosen in the review step. |
+| Recording date | The US Eastern calendar date chosen in the review step. |
 | Privacy | `unlisted` (but see [Limits on new Google Cloud projects](#limits-on-new-google-cloud-projects)). |
 
 For example, `beach-day_2026.mp4` recorded at 16:00 UTC on July 1, 2026 gets the title
@@ -472,8 +432,8 @@ beach-day_2026
 Recorded (Eastern): 2026-07-01 12:00:00 EDT
 ```
 
-The recording time in the description is always shown in US Eastern time (`EST` or `EDT`).
-To use a different zone, change `EASTERN_TIME` in
+The tables, the date editor, the description, and the recording date all use US Eastern time
+(`EST` or `EDT`). Log messages stay in UTC. To use a different zone, change `EASTERN_TIME` in
 `src/youtube_bulk_uploader/metadata.py`.
 
 The tool doesn't set thumbnails, playlists, captions, comment settings, age restrictions, end
@@ -494,8 +454,9 @@ Dates before 1900 or more than 2 days in the future are ignored. If no embedded 
 usable, the tool falls back to the file-system date: creation time on Windows and macOS,
 modification time on Linux.
 
-The scan and review tables show all dates in UTC. Embedded dates without a time zone are
-treated as UTC, which matches how most cameras and phones store video dates. The **From**
+The scan and review tables show all dates in US Eastern time. Embedded dates without a time
+zone are read as UTC, which matches how most cameras and phones store video dates, and then
+shown in Eastern time. The **From**
 column shows where each selected date came from: `EXIF`, `FS` (file system), or `Manual`.
 In a narrow terminal, the table hides the selected-date columns. Widen the window to see them.
 
@@ -627,6 +588,13 @@ uv run --no-sync pytest -k TEST_NAME
 
 Add or remove dependencies with `uv add` and `uv remove` (use `--group lint`, `--group test`,
 or `--group type` for development tools), so `pyproject.toml` and `uv.lock` stay in sync.
+
+### Releases and versions
+
+Every push to `main` that passes CI creates the next GitHub release: a patch version by
+default, or a minor or major version when the commit message contains `#minor` or `#major`.
+The git tag is the version. `pyproject.toml` holds a `0.0.0` placeholder, and
+`uv run youtube-uploader --version` reads the tag, so run `git pull` to fetch new tags.
 
 ### Project layout
 

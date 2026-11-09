@@ -13,7 +13,7 @@ from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
-from .metadata import VideoMetadata
+from .metadata import EASTERN_TIME, VideoMetadata
 from .utils import format_duration
 
 logger = logging.getLogger("youtube_uploader")
@@ -96,7 +96,10 @@ class YouTubeUploader:
 
         # YouTube's recordingDetails.recordingDate is typed as a date (not datetime).
         # The documented canonical format is YYYY-MM-DD (RFC 3339 date-only).
-        recording_date_iso = metadata.creation_date.strftime("%Y-%m-%d")
+        # Use the Eastern date so it matches the description and review table.
+        recording_date_iso = metadata.creation_date.astimezone(EASTERN_TIME).strftime(
+            "%Y-%m-%d"
+        )
 
         settings = metadata.upload_settings
         snippet = {

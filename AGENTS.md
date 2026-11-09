@@ -19,6 +19,8 @@ Compact reference for AI agents working in this repository.
 - **YouTube API Chunk Size**: Must be a multiple of 256 KB. Handled in `src/youtube_bulk_uploader/main.py` and `src/youtube_bulk_uploader/uploader.py`.
 - **Privacy Policy**: Hardcoded to `unlisted`. Overridden and logged as warning if set otherwise in code.
 - **Metadata Priority**: EXIF recording dates (DateTimeOriginal, etc.) > Filesystem dates. Extracted in `src/youtube_bulk_uploader/metadata.py`.
+- **Versioning**: The git tag is the version. `pyproject.toml` holds a `0.0.0` placeholder, so don't bump it. `.github/workflows/release.yml` tags each push to `main` after CI passes, and `--version` reads `git describe --tags`.
+- **Display Time Zone**: Dates are stored and compared in UTC, but shown to the user, typed in the date editor, and sent as `recordingDate` in US Eastern (`EASTERN_TIME` in `src/youtube_bulk_uploader/metadata.py`).
 - **Batch Processing**: `get_batch_exiftool_dates` uses bounded subprocess batches to avoid Windows command-line limits.
 
 ## Operational Gotchas

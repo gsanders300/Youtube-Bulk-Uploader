@@ -7,7 +7,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
 
@@ -38,7 +37,7 @@ from .exiftool import (
     get_exiftool_dates,
     is_exiftool_available,
 )
-from .metadata import UploadSettings, VideoMetadata
+from .metadata import EASTERN_TIME, UploadSettings, VideoMetadata
 from .state import UploadLedger, get_default_ledger_path
 from .uploader import DEFAULT_CHUNK_SIZE, UploadResult, YouTubeUploader
 from .utils import (
@@ -46,6 +45,7 @@ from .utils import (
     format_file_size,
     get_config_dir,
     get_data_dir,
+    get_project_root,
     setup_logging,
 )
 from .video_processor import (
@@ -56,11 +56,6 @@ from .video_processor import (
 )
 
 console = Console()
-
-try:
-    _PACKAGE_VERSION = version("youtube-bulk-uploader")
-except PackageNotFoundError:
-    _PACKAGE_VERSION = "0+unknown"
 
 # Minimum chunk size enforced by the YouTube resumable upload API.
 _CHUNK_ALIGNMENT = 256 * 1024  # 256 KB
@@ -89,6 +84,17 @@ def _format_table_filename(filename: str, max_width: int) -> str:
     if prefix_width < 1:
         return filename[: max_width - 1] + "…"
     return f"{filename[:prefix_width]}…{suffix}"
+
+
+def _et(dt: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Format a stored UTC datetime in US Eastern time for display."""
+    return dt.astimezone(EASTERN_TIME).strftime(fmt)
+
+
+def _parse_eastern(text: str) -> datetime:
+    """Parse a YYYY-MM-DD HH:MM entry typed in Eastern time into a UTC datetime."""
+    naive = datetime.strptime(text, "%Y-%m-%d %H:%M")
+    return naive.replace(tzinfo=EASTERN_TIME).astimezone(UTC)
 
 
 def _date_source_display(date_source: str) -> tuple[str, str]:
@@ -255,16 +261,18 @@ def review_dates(metadata_list: list[VideoMetadata]) -> list[VideoMetadata]:
         available_options = list(all_dates.items())
 
         console.print(f"\n[bold]Editing: {escape(m.title)}[/bold]")
-        proposed = m.creation_date.strftime("%Y-%m-%d %H:%M")
-        console.print(f"  Current proposed: {proposed} ({m.date_source})")
+        proposed = _et(m.creation_date)
+        console.print(f"  Current proposed: {proposed} ET ({m.date_source})")
 
         if not available_options:
             console.print("  [yellow]No metadata dates found for this file.[/yellow]")
         else:
             for i, (field, dt) in enumerate(available_options, 1):
-                console.print(f"  {i}: {field} ({dt.strftime('%Y-%m-%d %H:%M')})")
+                console.print(f"  {i}: {field} ({_et(dt)} ET)")
 
-        console.print(f"  {escape('[c]')} Enter custom date (YYYY-MM-DD HH:MM)")
+        console.print(
+            f"  {escape('[c]')} Enter custom date in Eastern time (YYYY-MM-DD HH:MM)"
+        )
         console.print(f"  {escape('[s]')} Skip / Keep current")
 
         edit_choice = click.prompt("Select date source", type=str).strip().lower()
@@ -272,18 +280,15 @@ def review_dates(metadata_list: list[VideoMetadata]) -> list[VideoMetadata]:
         if edit_choice == "s":
             continue
         elif edit_choice == "c":
-            date_str = click.prompt("Enter new date (YYYY-MM-DD HH:MM)", type=str)
+            date_str = click.prompt(
+                "Enter new date in Eastern time (YYYY-MM-DD HH:MM)", type=str
+            )
             try:
-                new_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M").replace(
-                    tzinfo=UTC
-                )
+                new_date = _parse_eastern(date_str)
                 m.creation_date = new_date
                 m.date_source = "user_corrected"
                 m.date_field = "user_corrected"
-                console.print(
-                    f"  [green]✓ Updated to "
-                    f"{new_date.strftime('%Y-%m-%d %H:%M')}[/green]"
-                )
+                console.print(f"  [green]✓ Updated to {_et(new_date)} ET[/green]")
             except ValueError:
                 console.print(
                     "  [red]Invalid format. Please use YYYY-MM-DD HH:MM[/red]"
@@ -295,10 +300,7 @@ def review_dates(metadata_list: list[VideoMetadata]) -> list[VideoMetadata]:
                 m.creation_date = dt
                 m.date_source = "exiftool"
                 m.date_field = field
-                console.print(
-                    f"  [green]✓ Selected {field}: "
-                    f"{dt.strftime('%Y-%m-%d %H:%M')}[/green]"
-                )
+                console.print(f"  [green]✓ Selected {field}: {_et(dt)} ET[/green]")
             else:
                 console.print("  [red]Invalid option number[/red]")
         else:
@@ -343,9 +345,9 @@ def _build_video_table(
     table.add_column("Size", justify="right", width=9, no_wrap=True)
 
     if layout == "wide":
-        table.add_column("FS Date (UTC)", style="yellow", width=16, no_wrap=True)
-        table.add_column("EXIF Date (UTC)", style="cyan", width=16, no_wrap=True)
-        table.add_column("Selected (UTC)", style="bold green", width=16, no_wrap=True)
+        table.add_column("FS Date (ET)", style="yellow", width=16, no_wrap=True)
+        table.add_column("EXIF Date (ET)", style="cyan", width=16, no_wrap=True)
+        table.add_column("Selected (ET)", style="bold green", width=16, no_wrap=True)
         table.add_column(
             "From",
             width=18,
@@ -353,9 +355,9 @@ def _build_video_table(
             no_wrap=True,
         )
     elif layout == "medium":
-        table.add_column("FS Date (UTC)", style="yellow", width=16, no_wrap=True)
-        table.add_column("EXIF Date (UTC)", style="cyan", width=16, no_wrap=True)
-        table.add_column("Selected (UTC)", style="bold green", width=16, no_wrap=True)
+        table.add_column("FS Date (ET)", style="yellow", width=16, no_wrap=True)
+        table.add_column("EXIF Date (ET)", style="cyan", width=16, no_wrap=True)
+        table.add_column("Selected (ET)", style="bold green", width=16, no_wrap=True)
         table.add_column(
             "From",
             width=14,
@@ -363,8 +365,8 @@ def _build_video_table(
             no_wrap=True,
         )
     elif layout == "compact":
-        table.add_column("FS (UTC)", style="yellow", width=10, no_wrap=True)
-        table.add_column("EXIF (UTC)", style="cyan", width=10, no_wrap=True)
+        table.add_column("FS (ET)", style="yellow", width=10, no_wrap=True)
+        table.add_column("EXIF (ET)", style="cyan", width=10, no_wrap=True)
         table.add_column("Selected", style="bold green", width=10, no_wrap=True)
         table.add_column(
             "From",
@@ -373,8 +375,8 @@ def _build_video_table(
             no_wrap=True,
         )
     else:
-        table.add_column("FS (UTC)", style="yellow", width=10, no_wrap=True)
-        table.add_column("EXIF (UTC)", style="cyan", width=10, no_wrap=True)
+        table.add_column("FS (ET)", style="yellow", width=10, no_wrap=True)
+        table.add_column("EXIF (ET)", style="cyan", width=10, no_wrap=True)
 
     color_legend = "Yellow: FS  •  Cyan: EXIF  •  Green: selected"
     table.caption = (
@@ -394,49 +396,45 @@ def _build_video_table(
         source_name, source_style = _date_source_display(m.date_source)
         source = Text(source_name, style=source_style, no_wrap=True)
         if layout == "wide":
-            exif_display = (
-                m.exif_date.strftime("%Y-%m-%d %H:%M") if m.exif_date else "N/A"
-            )
+            exif_display = _et(m.exif_date) if m.exif_date else "N/A"
             table.add_row(
                 index,
                 filename,
                 file_size,
-                m.fs_date.strftime("%Y-%m-%d %H:%M"),
+                _et(m.fs_date),
                 exif_display,
-                m.creation_date.strftime("%Y-%m-%d %H:%M"),
+                _et(m.creation_date),
                 source,
             )
         elif layout == "medium":
-            exif_display = (
-                m.exif_date.strftime("%Y-%m-%d %H:%M") if m.exif_date else "N/A"
-            )
+            exif_display = _et(m.exif_date) if m.exif_date else "N/A"
             table.add_row(
                 index,
                 filename,
                 file_size,
-                m.fs_date.strftime("%Y-%m-%d %H:%M"),
+                _et(m.fs_date),
                 exif_display,
-                m.creation_date.strftime("%Y-%m-%d %H:%M"),
+                _et(m.creation_date),
                 source,
             )
         elif layout == "compact":
-            exif_display = m.exif_date.strftime("%Y-%m-%d") if m.exif_date else "N/A"
+            exif_display = _et(m.exif_date, "%Y-%m-%d") if m.exif_date else "N/A"
             table.add_row(
                 index,
                 filename,
                 file_size,
-                m.fs_date.strftime("%Y-%m-%d"),
+                _et(m.fs_date, "%Y-%m-%d"),
                 exif_display,
-                m.creation_date.strftime("%Y-%m-%d"),
+                _et(m.creation_date, "%Y-%m-%d"),
                 source,
             )
         else:
-            exif_display = m.exif_date.strftime("%Y-%m-%d") if m.exif_date else "N/A"
+            exif_display = _et(m.exif_date, "%Y-%m-%d") if m.exif_date else "N/A"
             table.add_row(
                 index,
                 filename,
                 file_size,
-                m.fs_date.strftime("%Y-%m-%d"),
+                _et(m.fs_date, "%Y-%m-%d"),
                 exif_display,
             )
 
@@ -448,8 +446,38 @@ def _print_video_table(metadata_list: list[VideoMetadata], title: str) -> None:
     console.print(_build_video_table(metadata_list, title, console.width))
 
 
+def _git_version() -> str:
+    """Return this checkout's release tag; pyproject.toml holds only a placeholder."""
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags"],
+            cwd=get_project_root(),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return result.stdout.strip().removeprefix("v")
+
+
+def _print_version(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
+    """Print the version only when asked, so other commands never run git."""
+    if not value or ctx.resilient_parsing:
+        return
+    click.echo(f"youtube-uploader, version {_git_version()}")
+    ctx.exit()
+
+
 @click.group()
-@click.version_option(version=_PACKAGE_VERSION, prog_name="youtube-uploader")
+@click.option(
+    "--version",
+    is_flag=True,
+    expose_value=False,
+    is_eager=True,
+    callback=_print_version,
+    help="Show the version and exit.",
+)
 def cli() -> None:
     """YouTube Bulk Video Uploader - Upload videos in batch as unlisted."""
     pass
@@ -686,13 +714,13 @@ def sync_dates(directory: str | None, recursive: bool) -> None:
 
     table = Table(title="Proposed Date Changes")
     table.add_column("File", style="cyan")
-    table.add_column("Current Date", style="dim")
-    table.add_column("Proposed Date", style="green")
+    table.add_column("Current Date (ET)", style="dim")
+    table.add_column("Proposed Date (ET)", style="green")
 
     for change in proposed_changes:
         filename = Path(cast(str, change["path"])).name
-        current_str = cast(datetime, change["current"]).strftime("%Y-%m-%d %H:%M")
-        proposed_str = cast(datetime, change["proposed"]).strftime("%Y-%m-%d %H:%M")
+        current_str = _et(cast(datetime, change["current"]))
+        proposed_str = _et(cast(datetime, change["proposed"]))
         table.add_row(
             Text(filename),
             current_str,
@@ -1138,7 +1166,7 @@ def upload(
         table.add_column("#", style="dim", width=4)
         table.add_column("Title", style="cyan", max_width=40)
         table.add_column("Size", justify="right")
-        table.add_column("Date", style="dim")
+        table.add_column("Date (ET)", style="dim")
         table.add_column("Status", width=12, justify="center")
         table.add_column("URL/Error", style="dim")
 
@@ -1157,7 +1185,7 @@ def upload(
                 str(i),
                 Text(_truncate(m.title)),
                 format_file_size(m.file_size),
-                m.creation_date.strftime("%Y-%m-%d"),
+                _et(m.creation_date, "%Y-%m-%d"),
                 f"[{color}]{state.status}[/{color}]",
                 Text(state.url),
             )

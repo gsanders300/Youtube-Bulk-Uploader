@@ -1124,6 +1124,15 @@ class TestBuildRequestBody:
         assert len(recording_date) == 10
         assert recording_date.count("-") == 2
 
+    def test_recording_date_uses_eastern_calendar_day(self, tmp_path):
+        from youtube_bulk_uploader.uploader import YouTubeUploader
+
+        uploader = YouTubeUploader(service=MagicMock())
+        meta = self._make_meta(tmp_path)
+        meta.creation_date = dt(2026, 11, 8, 2, 0)  # 9pm EST on Nov 7
+        body = uploader._build_request_body(meta)
+        assert body["recordingDetails"]["recordingDate"] == "2026-11-07"
+
     def test_title_truncated_to_100(self, tmp_path):
         from youtube_bulk_uploader.uploader import YouTubeUploader
 
@@ -1218,27 +1227,52 @@ class TestMainHelpers:
             "#",
             "File",
             "Size",
-            "FS (UTC)",
-            "EXIF (UTC)",
+            "FS (ET)",
+            "EXIF (ET)",
         ]
         assert [column.header for column in compact.columns][-4:] == [
-            "FS (UTC)",
-            "EXIF (UTC)",
+            "FS (ET)",
+            "EXIF (ET)",
             "Selected",
             "From",
         ]
         assert [column.header for column in medium.columns][-4:] == [
-            "FS Date (UTC)",
-            "EXIF Date (UTC)",
-            "Selected (UTC)",
+            "FS Date (ET)",
+            "EXIF Date (ET)",
+            "Selected (ET)",
             "From",
         ]
         assert [column.header for column in wide.columns][-4:] == [
-            "FS Date (UTC)",
-            "EXIF Date (UTC)",
-            "Selected (UTC)",
+            "FS Date (ET)",
+            "EXIF Date (ET)",
+            "Selected (ET)",
             "From",
         ]
+
+    def test_dates_display_and_parse_in_eastern_time(self):
+        from youtube_bulk_uploader.main import _et, _parse_eastern
+
+        # 02:00 UTC on Nov 8, 2026 is 9pm EST on Nov 7 (DST ended Nov 1).
+        assert _et(dt(2026, 11, 8, 2, 0)) == "2026-11-07 21:00"
+        assert _parse_eastern("2026-11-07 21:00") == dt(2026, 11, 8, 2, 0)
+        # Summer dates use EDT (UTC-4).
+        assert _parse_eastern("2026-07-01 12:00") == dt(2026, 7, 1, 16, 0)
+
+    def test_version_comes_from_git_tag(self):
+        import subprocess
+
+        from youtube_bulk_uploader.main import _git_version
+
+        tagged = MagicMock(stdout="v1.3.2\n")
+        with patch("youtube_bulk_uploader.main.subprocess.run", return_value=tagged):
+            assert _git_version() == "1.3.2"
+        failure = subprocess.CalledProcessError(128, ["git"])
+        with patch("youtube_bulk_uploader.main.subprocess.run", side_effect=failure):
+            assert _git_version() == "unknown"
+        with patch(
+            "youtube_bulk_uploader.main.subprocess.run", side_effect=FileNotFoundError
+        ):
+            assert _git_version() == "unknown"
 
     def test_date_source_labels_match_table_columns(self):
         from youtube_bulk_uploader.main import _date_source_display
