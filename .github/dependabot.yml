@@ -1,0 +1,20 @@
+version: 2
+
+# Weekly grouped GitHub Actions updates, matching the digest repos. Minor and patch
+# bumps come in one pull request; major versions get their own "-major" group so they
+# can be reviewed separately. Pushing a change to this file starts a Dependabot run.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: saturday
+      time: "03:00"
+      timezone: America/New_York
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      github-actions-major:
+        patterns: ["*"]
+        update-types: [major]
